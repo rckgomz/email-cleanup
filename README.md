@@ -60,6 +60,27 @@ with `--apply`, archived). Useful for testing on a small batch before
 running the same command without `--limit` on the full result set.
 Defaults to `0` (no limit).
 
+### Unmark important mail
+
+```bash
+# Dry run (default) — shows what would be unmarked, changes nothing
+./bin/email-cleanup unmark-important
+
+# Actually remove the Important marker
+./bin/email-cleanup unmark-important --apply
+
+# Only unmark Important mail older than a date
+./bin/email-cleanup unmark-important --before=2026-08-01 --apply
+
+# Try it on just the first 10 matches first
+./bin/email-cleanup unmark-important --apply --limit=10
+```
+
+Unlike `archive-old-mail`, `--before` is optional here — omit it to target
+every message currently marked Important. This command only removes the
+Important marker; it does not archive or otherwise move messages. Run
+`archive-old-mail` separately afterward if you also want them archived.
+
 ### Machine-readable logs
 
 Add `--json` to any command to switch logging from human-friendly text to
