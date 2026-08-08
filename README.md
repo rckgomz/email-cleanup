@@ -44,6 +44,12 @@ gitignored — never commit it.
 search semantics. Re-running is safe — once a message is archived it no
 longer matches `in:inbox`.
 
+Gmail's API only returns message IDs from a search; getting each message's
+Subject/From/Date (needed for the journal) takes one API call per message.
+This tool fetches those concurrently (up to 15 at a time) instead of one at
+a time, so large mailboxes search significantly faster — but very large
+result sets (tens of thousands of messages) can still take a few minutes.
+
 `--limit` caps how many matching messages are processed (searched and,
 with `--apply`, archived). Useful for testing on a small batch before
 running the same command without `--limit` on the full result set.

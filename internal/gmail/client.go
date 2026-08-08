@@ -4,13 +4,21 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
+	"golang.org/x/sync/errgroup"
 	gmailapi "google.golang.org/api/gmail/v1"
 )
 
 const progressLogInterval = 25
 
 const batchModifyLimit = 1000
+
+// searchConcurrency bounds how many messages.get calls run at once during
+// Search. Gmail's per-user quota is ~250 units/sec and each get costs 5
+// units, so this stays well under that even accounting for other API
+// activity, without needing explicit rate-limit retry/backoff.
+const searchConcurrency = 15
 
 type MessageMeta struct {
 	ID      string
@@ -35,7 +43,18 @@ func NewAPIService(svc *gmailapi.Service) *APIService {
 }
 
 func (a *APIService) Search(ctx context.Context, query string, limit int) ([]MessageMeta, error) {
-	var results []MessageMeta
+	ids, err := a.listMessageIDs(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	return a.fetchMessageMetas(ctx, ids)
+}
+
+// listMessageIDs paginates through messages.list, which only returns IDs
+// (no headers), so this is cheap even for large result sets. Stops early
+// once limit IDs are collected, if limit > 0.
+func (a *APIService) listMessageIDs(ctx context.Context, query string, limit int) ([]string, error) {
+	var ids []string
 	pageToken := ""
 	for {
 		call := a.svc.Users.Messages.List("me").Q(query).Context(ctx)
@@ -47,25 +66,54 @@ func (a *APIService) Search(ctx context.Context, query string, limit int) ([]Mes
 			return nil, fmt.Errorf("listing messages: %w", err)
 		}
 		for _, m := range resp.Messages {
-			full, err := a.svc.Users.Messages.Get("me", m.Id).
-				Format("metadata").
-				MetadataHeaders("Subject", "From", "Date").
-				Context(ctx).Do()
-			if err != nil {
-				return nil, fmt.Errorf("getting message %s: %w", m.Id, err)
-			}
-			results = append(results, messageMetaFromAPI(full))
-			if len(results)%progressLogInterval == 0 {
-				slog.Default().Info("fetching message details", "fetched", len(results))
-			}
-			if limit > 0 && len(results) >= limit {
-				return results, nil
+			ids = append(ids, m.Id)
+			if limit > 0 && len(ids) >= limit {
+				return ids, nil
 			}
 		}
 		if resp.NextPageToken == "" {
 			break
 		}
 		pageToken = resp.NextPageToken
+	}
+	return ids, nil
+}
+
+// fetchMessageMetas fetches Subject/From/Date for each id concurrently,
+// bounded by searchConcurrency, since Gmail's API requires one call per
+// message to get headers. Order of the returned slice matches ids. On the
+// first error, in-flight and not-yet-started fetches are cancelled and
+// that error is returned.
+func (a *APIService) fetchMessageMetas(ctx context.Context, ids []string) ([]MessageMeta, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	results := make([]MessageMeta, len(ids))
+	var fetched atomic.Int64
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(searchConcurrency)
+
+	for i, id := range ids {
+		g.Go(func() error {
+			full, err := a.svc.Users.Messages.Get("me", id).
+				Format("metadata").
+				MetadataHeaders("Subject", "From", "Date").
+				Context(gctx).Do()
+			if err != nil {
+				return fmt.Errorf("getting message %s: %w", id, err)
+			}
+			results[i] = messageMetaFromAPI(full)
+			if n := fetched.Add(1); n%progressLogInterval == 0 {
+				slog.Default().Info("fetching message details", "fetched", n, "total", len(ids))
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	return results, nil
 }
