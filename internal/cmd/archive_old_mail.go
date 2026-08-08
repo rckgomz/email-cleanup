@@ -179,6 +179,7 @@ func newRealGmailService(ctx context.Context) (gmail.Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	httpClient.Timeout = 30 * time.Second
 	apiSvc, err := gmailapi.NewService(ctx, option.WithHTTPClient(httpClient))
 	if err != nil {
 		return nil, fmt.Errorf("creating gmail api service: %w", err)

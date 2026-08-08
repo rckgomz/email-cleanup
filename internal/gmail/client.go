@@ -3,9 +3,12 @@ package gmail
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	gmailapi "google.golang.org/api/gmail/v1"
 )
+
+const progressLogInterval = 25
 
 const batchModifyLimit = 1000
 
@@ -50,6 +53,9 @@ func (a *APIService) Search(ctx context.Context, query string) ([]MessageMeta, e
 				return nil, fmt.Errorf("getting message %s: %w", m.Id, err)
 			}
 			results = append(results, messageMetaFromAPI(full))
+			if len(results)%progressLogInterval == 0 {
+				slog.Default().Info("fetching message details", "fetched", len(results))
+			}
 		}
 		if resp.NextPageToken == "" {
 			break
