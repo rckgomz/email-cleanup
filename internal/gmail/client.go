@@ -73,7 +73,7 @@ func (a *APIService) Archive(ctx context.Context, ids []string) error {
 }
 
 func chunkIDs(ids []string, size int) [][]string {
-	if len(ids) == 0 {
+	if len(ids) == 0 || size <= 0 {
 		return nil
 	}
 	var chunks [][]string

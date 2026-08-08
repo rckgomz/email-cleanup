@@ -18,6 +18,8 @@ func TestChunkIDs(t *testing.T) {
 		{"exact multiple", []string{"a", "b", "c", "d"}, 2, [][]string{{"a", "b"}, {"c", "d"}}},
 		{"remainder", []string{"a", "b", "c"}, 2, [][]string{{"a", "b"}, {"c"}}},
 		{"single chunk larger than input", []string{"a", "b"}, 5, [][]string{{"a", "b"}}},
+		{"zero size", []string{"a", "b"}, 0, nil},
+		{"negative size", []string{"a", "b"}, -1, nil},
 	}
 
 	for _, tt := range tests {

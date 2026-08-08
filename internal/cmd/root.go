@@ -11,8 +11,10 @@ import (
 var jsonLogs bool
 
 var RootCmd = &cobra.Command{
-	Use:   "email-cleanup",
-	Short: "Batch operations for Gmail",
+	Use:           "email-cleanup",
+	Short:         "Batch operations for Gmail",
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		setupLogger(jsonLogs)
 	},
