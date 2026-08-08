@@ -48,7 +48,12 @@ Gmail's API only returns message IDs from a search; getting each message's
 Subject/From/Date (needed for the journal) takes one API call per message.
 This tool fetches those concurrently (up to 15 at a time) instead of one at
 a time, so large mailboxes search significantly faster — but very large
-result sets (tens of thousands of messages) can still take a few minutes.
+result sets (tens of thousands of messages) can still take a while, since
+requests are throttled to stay under Gmail's default per-user API quota
+(15,000 units/minute). If you still hit a quota error, the tool retries
+with backoff automatically; if it happens repeatedly, you can request a
+higher quota at
+https://cloud.google.com/docs/quotas/help/request_increase.
 
 `--limit` caps how many matching messages are processed (searched and,
 with `--apply`, archived). Useful for testing on a small batch before

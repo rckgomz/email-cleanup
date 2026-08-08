@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/time/rate"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 
 	gmailapi "google.golang.org/api/gmail/v1"
@@ -88,6 +90,14 @@ type fakeGmailServer struct {
 	getDelay    time.Duration
 	inFlight    atomic.Int32
 	maxInFlight atomic.Int32
+
+	// rateLimitID, if set, makes the get handler return a 403 quota-exceeded
+	// error for that id the first rateLimitFailuresBeforeSuccess times it's
+	// requested, then succeed. rateLimitAttempts counts every request for
+	// that id, successful or not.
+	rateLimitID                    string
+	rateLimitFailuresBeforeSuccess int
+	rateLimitAttempts              atomic.Int32
 }
 
 func newFakeGmailServer(t *testing.T, ids []string) (*httptest.Server, *fakeGmailServer) {
@@ -110,6 +120,15 @@ func newFakeGmailServer(t *testing.T, ids []string) (*httptest.Server, *fakeGmai
 		if f.failID != "" && id == f.failID {
 			http.Error(w, "boom", http.StatusInternalServerError)
 			return
+		}
+		if f.rateLimitID != "" && id == f.rateLimitID {
+			attempt := f.rateLimitAttempts.Add(1)
+			if int(attempt) <= f.rateLimitFailuresBeforeSuccess {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":{"code":403,"message":"Quota exceeded for quota metric 'Queries'","errors":[{"reason":"rateLimitExceeded","message":"Quota exceeded"}]}}`))
+				return
+			}
 		}
 
 		cur := f.inFlight.Add(1)
@@ -309,5 +328,135 @@ func TestAPIServiceSearch_ContextCancellationReturnsPromptly(t *testing.T) {
 	// or draining the full worker queue, it should return well under 200ms.
 	if elapsed >= 200*time.Millisecond {
 		t.Errorf("Search() took %v to return after cancellation, want well under the 200ms request delay", elapsed)
+	}
+}
+
+func TestIsRateLimitError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"not a googleapi.Error", errors.New("boom"), false},
+		{"403 with rateLimitExceeded reason", &googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: "rateLimitExceeded"}}}, true},
+		{"429 status, no structured reason", &googleapi.Error{Code: 429, Message: "too many requests"}, true},
+		{"403 permission denied (not a quota error)", &googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: "forbidden"}}, Message: "Permission denied"}, false},
+		{"403 message mentions quota exceeded", &googleapi.Error{Code: 403, Message: "Quota exceeded for quota metric 'Queries'"}, true},
+		{"500 server error", &googleapi.Error{Code: 500, Message: "internal error"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isRateLimitError(tt.err)
+			if got != tt.want {
+				t.Errorf("isRateLimitError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWithRateLimitRetry_RetriesRateLimitErrorsThenSucceeds(t *testing.T) {
+	origSleep := backoffSleep
+	var sleeps []time.Duration
+	backoffSleep = func(ctx context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		return nil // don't actually wait in tests
+	}
+	t.Cleanup(func() { backoffSleep = origSleep })
+
+	limiter := rate.NewLimiter(rate.Inf, 0) // no pacing delay, isolate retry behavior
+	calls := 0
+	rateLimitErr := &googleapi.Error{Code: 429, Message: "rate limited"}
+
+	err := withRateLimitRetry(context.Background(), limiter, func() error {
+		calls++
+		if calls <= 2 {
+			return rateLimitErr
+		}
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("withRateLimitRetry() error = %v, want nil after eventual success", err)
+	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3 (2 failures + 1 success)", calls)
+	}
+	if len(sleeps) != 2 {
+		t.Errorf("len(sleeps) = %d, want 2 backoff sleeps for 2 failures", len(sleeps))
+	}
+}
+
+func TestWithRateLimitRetry_NonRateLimitErrorFailsImmediately(t *testing.T) {
+	origSleep := backoffSleep
+	backoffSleep = func(ctx context.Context, d time.Duration) error {
+		t.Fatal("backoffSleep should not be called for a non-rate-limit error")
+		return nil
+	}
+	t.Cleanup(func() { backoffSleep = origSleep })
+
+	limiter := rate.NewLimiter(rate.Inf, 0)
+	calls := 0
+	wantErr := errors.New("not a rate limit error")
+
+	err := withRateLimitRetry(context.Background(), limiter, func() error {
+		calls++
+		return wantErr
+	})
+
+	if !errors.Is(err, wantErr) {
+		t.Errorf("withRateLimitRetry() error = %v, want it to wrap %v", err, wantErr)
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1 (no retry for non-rate-limit error)", calls)
+	}
+}
+
+func TestWithRateLimitRetry_GivesUpAfterMaxRetries(t *testing.T) {
+	origSleep := backoffSleep
+	backoffSleep = func(ctx context.Context, d time.Duration) error { return nil }
+	t.Cleanup(func() { backoffSleep = origSleep })
+
+	limiter := rate.NewLimiter(rate.Inf, 0)
+	calls := 0
+	rateLimitErr := &googleapi.Error{Code: 429, Message: "always rate limited"}
+
+	err := withRateLimitRetry(context.Background(), limiter, func() error {
+		calls++
+		return rateLimitErr
+	})
+
+	if err == nil {
+		t.Fatal("withRateLimitRetry() error = nil, want error after exhausting retries")
+	}
+	if !errors.Is(err, rateLimitErr) {
+		t.Errorf("withRateLimitRetry() error = %v, want it to wrap the last rate limit error", err)
+	}
+	wantCalls := maxRateLimitRetries + 1
+	if calls != wantCalls {
+		t.Errorf("calls = %d, want %d (initial attempt + %d retries)", calls, wantCalls, maxRateLimitRetries)
+	}
+}
+
+func TestAPIServiceSearch_RetriesTransientRateLimitThenSucceeds(t *testing.T) {
+	origSleep := backoffSleep
+	backoffSleep = func(ctx context.Context, d time.Duration) error { return nil }
+	t.Cleanup(func() { backoffSleep = origSleep })
+
+	ids := []string{"msg-a", "msg-b", "msg-c"}
+	server, fake := newFakeGmailServer(t, ids)
+	fake.rateLimitID = "msg-b"
+	fake.rateLimitFailuresBeforeSuccess = 2
+	svc := newTestAPIService(t, server)
+
+	got, err := svc.Search(context.Background(), "in:inbox", 0)
+	if err != nil {
+		t.Fatalf("Search() error = %v, want it to succeed after retrying the rate-limited message", err)
+	}
+	if len(got) != len(ids) {
+		t.Fatalf("len(got) = %d, want %d", len(got), len(ids))
+	}
+	if fake.rateLimitAttempts.Load() != 3 {
+		t.Errorf("rateLimitAttempts = %d, want 3 (2 failures + 1 success)", fake.rateLimitAttempts.Load())
 	}
 }
