@@ -14,6 +14,10 @@ const progressLogInterval = 25
 
 const batchModifyLimit = 1000
 
+// listPageSize is the max messages.list page size Gmail allows, used to
+// minimize the number of sequential list calls needed for large mailboxes.
+const listPageSize = 500
+
 // searchConcurrency bounds how many messages.get calls run at once during
 // Search. Gmail's per-user quota is ~250 units/sec and each get costs 5
 // units, so this stays well under that even accounting for other API
@@ -57,7 +61,7 @@ func (a *APIService) listMessageIDs(ctx context.Context, query string, limit int
 	var ids []string
 	pageToken := ""
 	for {
-		call := a.svc.Users.Messages.List("me").Q(query).Context(ctx)
+		call := a.svc.Users.Messages.List("me").Q(query).MaxResults(listPageSize).Context(ctx)
 		if pageToken != "" {
 			call = call.PageToken(pageToken)
 		}
@@ -71,6 +75,7 @@ func (a *APIService) listMessageIDs(ctx context.Context, query string, limit int
 				return ids, nil
 			}
 		}
+		slog.Default().Info("listing messages", "listed", len(ids))
 		if resp.NextPageToken == "" {
 			break
 		}

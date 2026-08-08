@@ -3,6 +3,7 @@ package gmail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"google.golang.org/api/option"
 
@@ -83,6 +85,7 @@ func TestMessageMetaFromAPI_MissingHeaders(t *testing.T) {
 type fakeGmailServer struct {
 	ids         []string
 	failID      string
+	getDelay    time.Duration
 	inFlight    atomic.Int32
 	maxInFlight atomic.Int32
 }
@@ -118,6 +121,14 @@ func newFakeGmailServer(t *testing.T, ids []string) (*httptest.Server, *fakeGmai
 			}
 			if f.maxInFlight.CompareAndSwap(max, cur) {
 				break
+			}
+		}
+
+		if f.getDelay > 0 {
+			select {
+			case <-time.After(f.getDelay):
+			case <-r.Context().Done():
+				return
 			}
 		}
 
@@ -261,5 +272,42 @@ func TestAPIServiceSearch_ResultsAreASortedSupersetOfIDs(t *testing.T) {
 	sort.Strings(wantIDs)
 	if !reflect.DeepEqual(gotIDs, wantIDs) {
 		t.Errorf("got ids = %v, want %v", gotIDs, wantIDs)
+	}
+}
+
+func TestAPIServiceSearch_ContextCancellationReturnsPromptly(t *testing.T) {
+	ids := make([]string, 100)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("msg-%03d", i)
+	}
+	// Give the server a delay so requests are still in flight when we cancel.
+	server, fake := newFakeGmailServer(t, ids)
+	fake.getDelay = 200 * time.Millisecond
+	svc := newTestAPIService(t, server)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	got, err := svc.Search(ctx, "in:inbox", 0)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Search() error = nil, want context.Canceled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Search() error = %v, want it to wrap context.Canceled", err)
+	}
+	if got != nil {
+		t.Errorf("Search() results = %v, want nil on cancellation", got)
+	}
+	// The delay is 200ms; cancellation fires at 30ms. If Search actually
+	// respects the cancellation instead of waiting out in-flight requests
+	// or draining the full worker queue, it should return well under 200ms.
+	if elapsed >= 200*time.Millisecond {
+		t.Errorf("Search() took %v to return after cancellation, want well under the 200ms request delay", elapsed)
 	}
 }

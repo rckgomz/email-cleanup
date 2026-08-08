@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -21,7 +24,9 @@ var RootCmd = &cobra.Command{
 }
 
 func Execute() error {
-	return RootCmd.Execute()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return RootCmd.ExecuteContext(ctx)
 }
 
 func setupLogger(jsonOutput bool) {
