@@ -29,6 +29,11 @@ type fakeGmailService struct {
 	archivedIDs  []string
 	archiveErr   error
 	archiveCalls int
+
+	removeLabelCalls int
+	removedLabel     string
+	removedIDs       []string
+	removeLabelErr   error
 }
 
 func (f *fakeGmailService) Search(ctx context.Context, query string, limit int) ([]gmail.MessageMeta, error) {
@@ -48,8 +53,19 @@ func (f *fakeGmailService) Archive(ctx context.Context, ids []string) error {
 }
 
 func (f *fakeGmailService) RemoveLabel(ctx context.Context, ids []string, label string) error {
-	// Not used in archive_old_mail tests
-	return nil
+	f.removeLabelCalls++
+	f.removedLabel = label
+	f.removedIDs = append(f.removedIDs, ids...)
+	// For backward compatibility with archive_old_mail tests: when removing INBOX label,
+	// also update archive tracking fields and return archiveErr if set
+	if label == "INBOX" {
+		f.archiveCalls++
+		f.archivedIDs = append(f.archivedIDs, ids...)
+		if f.archiveErr != nil {
+			return f.archiveErr
+		}
+	}
+	return f.removeLabelErr
 }
 
 func TestDoArchiveRun_DryRun_DoesNotCallArchive(t *testing.T) {

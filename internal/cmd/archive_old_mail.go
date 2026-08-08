@@ -43,6 +43,15 @@ func buildQuery(cutoff time.Time) string {
 	return fmt.Sprintf("in:inbox before:%s", cutoff.Format("2006/01/02"))
 }
 
+var archiveOp = batchLabelOp{
+	Label:           "INBOX",
+	CommandName:     "archive-old-mail",
+	AppliedAction:   "archived",
+	DryRunAction:    "would_archive",
+	ApplyMsgFormat:  "Archived %d message(s).\n",
+	DryRunMsgFormat: "Dry run: %d message(s) would be archived. Re-run with --apply to archive them.\n",
+}
+
 func runArchiveOldMail(cmd *cobra.Command, args []string) error {
 	cutoff, err := time.Parse("2006-01-02", beforeDate)
 	if err != nil {
@@ -72,96 +81,7 @@ func runArchiveOldMail(cmd *cobra.Command, args []string) error {
 }
 
 func doArchiveRun(ctx context.Context, svc gmail.Service, jrnl *journal.Journal, query string, args []string, apply bool, limit int, logger *slog.Logger, out io.Writer) error {
-	runID := newRunID()
-	start := time.Now()
-
-	matches, err := svc.Search(ctx, query, limit)
-	if err != nil {
-		if jErr := jrnl.WriteRun(journal.RunRecord{
-			RunID:         runID,
-			Timestamp:     start,
-			Command:       "archive-old-mail",
-			Args:          args,
-			Query:         query,
-			DryRun:        !apply,
-			MatchedCount:  0,
-			AffectedCount: 0,
-			DurationMS:    time.Since(start).Milliseconds(),
-			Status:        "error",
-		}); jErr != nil {
-			return fmt.Errorf("searching messages: %w (additionally failed to write error journal record: %v)", err, jErr)
-		}
-		return fmt.Errorf("searching messages: %w", err)
-	}
-	logger.Info("search complete", "matched", len(matches), "query", query)
-
-	action := "would_archive"
-	var affected int
-	if apply && len(matches) > 0 {
-		ids := make([]string, len(matches))
-		for i, m := range matches {
-			ids[i] = m.ID
-		}
-		if err := svc.Archive(ctx, ids); err != nil {
-			if jErr := jrnl.WriteRun(journal.RunRecord{
-				RunID:         runID,
-				Timestamp:     start,
-				Command:       "archive-old-mail",
-				Args:          args,
-				Query:         query,
-				DryRun:        !apply,
-				MatchedCount:  len(matches),
-				AffectedCount: 0,
-				DurationMS:    time.Since(start).Milliseconds(),
-				Status:        "error",
-			}); jErr != nil {
-				return fmt.Errorf("archiving messages: %w (additionally failed to write error journal record: %v)", err, jErr)
-			}
-			return fmt.Errorf("archiving messages: %w", err)
-		}
-		action = "archived"
-		affected = len(matches)
-	}
-
-	for _, m := range matches {
-		if err := jrnl.WriteMessage(journal.MessageRecord{
-			RunID:     runID,
-			MessageID: m.ID,
-			Subject:   m.Subject,
-			From:      m.From,
-			Date:      m.Date,
-			Action:    action,
-		}); err != nil {
-			return fmt.Errorf("writing journal message record: %w", err)
-		}
-	}
-
-	if err := jrnl.WriteRun(journal.RunRecord{
-		RunID:         runID,
-		Timestamp:     start,
-		Command:       "archive-old-mail",
-		Args:          args,
-		Query:         query,
-		DryRun:        !apply,
-		MatchedCount:  len(matches),
-		AffectedCount: affected,
-		DurationMS:    time.Since(start).Milliseconds(),
-		Status:        "ok",
-	}); err != nil {
-		return fmt.Errorf("writing journal run record: %w", err)
-	}
-
-	if apply {
-		fmt.Fprintf(out, "Archived %d message(s).\n", affected)
-		fmt.Fprintln(out, "Reminder: run `task commit-history` to commit and push the updated journal.")
-	} else {
-		fmt.Fprintf(out, "Dry run: %d message(s) would be archived. Re-run with --apply to archive them.\n", len(matches))
-	}
-	return nil
-}
-
-func newRunID() string {
-	return time.Now().UTC().Format("20060102T150405.000000000Z")
+	return doBatchLabelRun(ctx, svc, jrnl, query, args, apply, limit, archiveOp, logger, out)
 }
 
 func statCredentials(path string) (os.FileInfo, error) {
