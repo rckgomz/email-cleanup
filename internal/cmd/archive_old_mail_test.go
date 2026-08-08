@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -24,12 +25,16 @@ func TestBuildQuery(t *testing.T) {
 
 type fakeGmailService struct {
 	matches      []gmail.MessageMeta
+	searchErr    error
 	archivedIDs  []string
 	archiveErr   error
 	archiveCalls int
 }
 
 func (f *fakeGmailService) Search(ctx context.Context, query string) ([]gmail.MessageMeta, error) {
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
 	return f.matches, nil
 }
 
@@ -37,10 +42,6 @@ func (f *fakeGmailService) Archive(ctx context.Context, ids []string) error {
 	f.archiveCalls++
 	f.archivedIDs = append(f.archivedIDs, ids...)
 	return f.archiveErr
-}
-
-func newTestLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(nil, nil))
 }
 
 func TestDoArchiveRun_DryRun_DoesNotCallArchive(t *testing.T) {
@@ -134,6 +135,109 @@ func TestDoArchiveRun_Apply_ArchivesAndPrintsReminder(t *testing.T) {
 		if r["type"] == "run" && r["dry_run"] != false {
 			t.Errorf("run dry_run = %v, want false", r["dry_run"])
 		}
+	}
+}
+
+func TestDoArchiveRun_SearchError_WritesErrorRunRecord(t *testing.T) {
+	searchErr := errors.New("search boom")
+	svc := &fakeGmailService{searchErr: searchErr}
+	jPath := filepath.Join(t.TempDir(), "journal.jsonl")
+	jrnl, err := journal.Open(jPath)
+	if err != nil {
+		t.Fatalf("journal.Open() error = %v", err)
+	}
+	out := &bytes.Buffer{}
+
+	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01"}, true, slog.Default(), out)
+	if err == nil {
+		t.Fatal("doArchiveRun() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "search boom") {
+		t.Errorf("doArchiveRun() error = %v, want it to wrap search boom", err)
+	}
+	if svc.archiveCalls != 0 {
+		t.Errorf("archiveCalls = %d, want 0 when search fails", svc.archiveCalls)
+	}
+
+	records, err := journal.ReadAll(jPath)
+	if err != nil {
+		t.Fatalf("journal.ReadAll() error = %v", err)
+	}
+	var runRecords, messageRecords int
+	for _, r := range records {
+		switch r["type"] {
+		case "run":
+			runRecords++
+			if r["status"] != "error" {
+				t.Errorf("run record status = %v, want error", r["status"])
+			}
+			if r["matched_count"].(float64) != 0 {
+				t.Errorf("matched_count = %v, want 0", r["matched_count"])
+			}
+			if r["affected_count"].(float64) != 0 {
+				t.Errorf("affected_count = %v, want 0", r["affected_count"])
+			}
+		case "message":
+			messageRecords++
+		}
+	}
+	if runRecords != 1 {
+		t.Errorf("runRecords = %d, want 1", runRecords)
+	}
+	if messageRecords != 0 {
+		t.Errorf("messageRecords = %d, want 0", messageRecords)
+	}
+}
+
+func TestDoArchiveRun_ArchiveError_WritesErrorRunRecord(t *testing.T) {
+	archiveErr := errors.New("archive boom")
+	svc := &fakeGmailService{
+		matches: []gmail.MessageMeta{
+			{ID: "1", Subject: "Old 1", From: "a@example.com", Date: "2026-01-01"},
+		},
+		archiveErr: archiveErr,
+	}
+	jPath := filepath.Join(t.TempDir(), "journal.jsonl")
+	jrnl, err := journal.Open(jPath)
+	if err != nil {
+		t.Fatalf("journal.Open() error = %v", err)
+	}
+	out := &bytes.Buffer{}
+
+	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01", "--apply"}, true, slog.Default(), out)
+	if err == nil {
+		t.Fatal("doArchiveRun() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "archive boom") {
+		t.Errorf("doArchiveRun() error = %v, want it to wrap archive boom", err)
+	}
+
+	records, err := journal.ReadAll(jPath)
+	if err != nil {
+		t.Fatalf("journal.ReadAll() error = %v", err)
+	}
+	var runRecords int
+	for _, r := range records {
+		switch r["type"] {
+		case "run":
+			runRecords++
+			if r["status"] != "error" {
+				t.Errorf("run record status = %v, want error", r["status"])
+			}
+			if r["matched_count"].(float64) != 1 {
+				t.Errorf("matched_count = %v, want 1", r["matched_count"])
+			}
+			if r["affected_count"].(float64) != 0 {
+				t.Errorf("affected_count = %v, want 0", r["affected_count"])
+			}
+		case "message":
+			if r["action"] == "archived" {
+				t.Errorf("did not expect an 'archived' message record when Archive failed, got %v", r)
+			}
+		}
+	}
+	if runRecords != 1 {
+		t.Errorf("runRecords = %d, want 1", runRecords)
 	}
 }
 

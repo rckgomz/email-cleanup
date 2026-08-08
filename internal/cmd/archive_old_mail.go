@@ -63,7 +63,7 @@ func runArchiveOldMail(cmd *cobra.Command, args []string) error {
 	}
 
 	query := buildQuery(cutoff)
-	return doArchiveRun(cmd.Context(), svc, jrnl, query, cmd.Flags().Args(), applyFlag, slog.Default(), cmd.OutOrStdout())
+	return doArchiveRun(cmd.Context(), svc, jrnl, query, os.Args[1:], applyFlag, slog.Default(), cmd.OutOrStdout())
 }
 
 func doArchiveRun(ctx context.Context, svc gmail.Service, jrnl *journal.Journal, query string, args []string, apply bool, logger *slog.Logger, out io.Writer) error {
@@ -72,6 +72,20 @@ func doArchiveRun(ctx context.Context, svc gmail.Service, jrnl *journal.Journal,
 
 	matches, err := svc.Search(ctx, query)
 	if err != nil {
+		if jErr := jrnl.WriteRun(journal.RunRecord{
+			RunID:         runID,
+			Timestamp:     start,
+			Command:       "archive-old-mail",
+			Args:          args,
+			Query:         query,
+			DryRun:        !apply,
+			MatchedCount:  0,
+			AffectedCount: 0,
+			DurationMS:    time.Since(start).Milliseconds(),
+			Status:        "error",
+		}); jErr != nil {
+			return fmt.Errorf("searching messages: %w (additionally failed to write error journal record: %v)", err, jErr)
+		}
 		return fmt.Errorf("searching messages: %w", err)
 	}
 	logger.Info("search complete", "matched", len(matches), "query", query)
@@ -84,6 +98,20 @@ func doArchiveRun(ctx context.Context, svc gmail.Service, jrnl *journal.Journal,
 			ids[i] = m.ID
 		}
 		if err := svc.Archive(ctx, ids); err != nil {
+			if jErr := jrnl.WriteRun(journal.RunRecord{
+				RunID:         runID,
+				Timestamp:     start,
+				Command:       "archive-old-mail",
+				Args:          args,
+				Query:         query,
+				DryRun:        !apply,
+				MatchedCount:  len(matches),
+				AffectedCount: 0,
+				DurationMS:    time.Since(start).Milliseconds(),
+				Status:        "error",
+			}); jErr != nil {
+				return fmt.Errorf("archiving messages: %w (additionally failed to write error journal record: %v)", err, jErr)
+			}
 			return fmt.Errorf("archiving messages: %w", err)
 		}
 		action = "archived"
@@ -145,7 +173,9 @@ func newRealGmailService(ctx context.Context) (gmail.Service, error) {
 		return nil, err
 	}
 	cache := gmail.NewTokenCache(credentialsDirName + "/token.json")
-	httpClient, err := gmail.GetClient(ctx, config, cache, promptForAuthCode)
+	httpClient, err := gmail.GetClient(ctx, config, cache, func(authURL string) (string, error) {
+		return promptForAuthCode(os.Stdout, authURL)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -156,8 +186,12 @@ func newRealGmailService(ctx context.Context) (gmail.Service, error) {
 	return gmail.NewAPIService(apiSvc), nil
 }
 
-func promptForAuthCode(authURL string) (string, error) {
-	fmt.Printf("Go to the following link in your browser, then paste the authorization code:\n%s\n\nCode: ", authURL)
+func promptForAuthCode(w io.Writer, authURL string) (string, error) {
+	fmt.Fprintf(w, "Go to the following link in your browser and sign in/consent:\n%s\n\n"+
+		"Your browser will then redirect to a localhost address that fails to load "+
+		"(e.g. \"This site can't be reached\" or \"connection refused\") — that's expected. "+
+		"Look at the browser's address bar: copy the value of the \"code=\" query parameter "+
+		"(everything after \"code=\" and before the next \"&\") and paste it below.\n\nCode: ", authURL)
 	var code string
 	if _, err := fmt.Scan(&code); err != nil {
 		return "", fmt.Errorf("reading auth code: %w", err)

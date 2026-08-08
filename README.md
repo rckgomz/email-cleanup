@@ -4,7 +4,7 @@ Batch Gmail operations, run from the command line instead of the Gmail UI.
 
 ## Setup
 
-1. Install Go 1.21+ and [Task](https://taskfile.dev/installation/).
+1. Install Go (see `go.mod` for the required version) and [Task](https://taskfile.dev/installation/).
 2. Get a Gmail API OAuth "Desktop app" client:
    ```bash
    task run -- credentials-help
@@ -60,6 +60,12 @@ run that mutates the mailbox, commit and push it:
 ```bash
 task commit-history
 ```
+
+Known limitation: if an `--apply` run fails partway through archiving, the
+journal's `run` record is written with `status: error` and
+`affected_count: 0`, but because Gmail batch requests are chunked
+internally, some messages may have already been archived on Gmail's side
+before the failure — check Gmail directly if a run errors mid-archive.
 
 ## Development
 
