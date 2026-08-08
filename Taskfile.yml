@@ -1,0 +1,39 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Build the email-cleanup binary
+    cmds:
+      - go build -o bin/email-cleanup ./cmd/email-cleanup
+
+  run:
+    desc: Run email-cleanup (pass args after --)
+    cmds:
+      - go run ./cmd/email-cleanup {{.CLI_ARGS}}
+
+  test:
+    desc: Run the test suite
+    cmds:
+      - go test ./...
+
+  tidy:
+    desc: Tidy go.mod/go.sum
+    cmds:
+      - go mod tidy
+
+  fmt:
+    desc: Format Go source
+    cmds:
+      - go fmt ./...
+
+  vet:
+    desc: Vet Go source
+    cmds:
+      - go vet ./...
+
+  commit-history:
+    desc: Commit and push the .history journal
+    cmds:
+      - git add .history
+      - git commit -m "Update journal"
+      - git push
