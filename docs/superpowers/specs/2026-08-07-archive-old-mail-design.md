@@ -98,7 +98,8 @@ Flow:
 5. Apply: batch-remove the `INBOX` label via `users.messages.batchModify` in
    chunks of ≤1000 ids (Gmail API limit). Log progress
    (`archived 250/1200`). Write journal `run` record with `dry_run: false`
-   and `message` records with action `archived`.
+   and `message` records with action `archived`. On completion, print the
+   commit reminder (see Journal section below).
 
 Idempotent: re-running after archiving is safe, since already-archived mail
 no longer matches `in:inbox`.
@@ -129,6 +130,25 @@ future `history`/`undo` command without a storage redesign. `.history/` is
 committed to git (not gitignored) — it holds no credentials or secrets, only
 a record of actions taken and which messages were affected (subject, from,
 date), so it's kept as a versioned audit trail.
+
+**Commit reminder**: any command that produces an effect (mutates the mailbox
+— e.g. `archive-old-mail --apply`; dry runs do not count, since they don't
+change mailbox state, though they still append to the journal file) prints a
+reminder after completing, pointing at a Task target that commits and pushes
+the journal:
+
+```
+Reminder: run `task commit-history` to commit and push the updated journal.
+```
+
+### `task commit-history`
+
+New Taskfile target that stages `.history/`, commits with an auto-generated
+message (e.g. `Update journal: <run_id> (<n> messages archived)`), and pushes
+to the current branch's remote. Not run automatically by the CLI itself —
+the CLI only prints the reminder; committing/pushing stays a deliberate,
+user-triggered step (consistent with never auto-pushing on the user's
+behalf).
 
 ## Error Handling
 
