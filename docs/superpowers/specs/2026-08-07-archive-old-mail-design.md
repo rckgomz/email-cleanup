@@ -45,7 +45,7 @@ email-cleanup/
     credentials.json                  # OAuth client, user-provided (not committed)
     token.json                        # cached user token, generated (not committed)
   .history/
-    journal.jsonl                     # gitignored; append-only run/message log
+    journal.jsonl                     # committed; append-only run/message log
   .gitignore
   go.mod
   Taskfile.yml
@@ -126,7 +126,9 @@ record kinds sharing a `run_id`:
 Every invocation of `archive-old-mail` (dry-run or apply) writes to the
 journal. This is durable, greppable/`jq`-able, and lays groundwork for a
 future `history`/`undo` command without a storage redesign. `.history/` is
-gitignored since it contains email metadata.
+committed to git (not gitignored) — it holds no credentials or secrets, only
+a record of actions taken and which messages were affected (subject, from,
+date), so it's kept as a versioned audit trail.
 
 ## Error Handling
 
