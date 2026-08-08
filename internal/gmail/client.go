@@ -65,6 +65,9 @@ type Service interface {
 	// limit messages have been fetched, issuing no further API calls.
 	Search(ctx context.Context, query string, limit int) ([]MessageMeta, error)
 	Archive(ctx context.Context, ids []string) error
+	// RemoveLabel removes the given Gmail label ID (e.g. "IMPORTANT") from
+	// each message in ids.
+	RemoveLabel(ctx context.Context, ids []string, label string) error
 }
 
 type APIService struct {
@@ -230,16 +233,30 @@ func (a *APIService) fetchMessageMetas(ctx context.Context, ids []string) ([]Mes
 }
 
 func (a *APIService) Archive(ctx context.Context, ids []string) error {
+	return a.modifyLabels(ctx, ids, "INBOX")
+}
+
+// RemoveLabel removes labelID from each message in ids, e.g. "IMPORTANT"
+// to unmark messages as important.
+func (a *APIService) RemoveLabel(ctx context.Context, ids []string, labelID string) error {
+	return a.modifyLabels(ctx, ids, labelID)
+}
+
+// modifyLabels removes labelID from each message in ids, in chunks of up
+// to batchModifyLimit, respecting the rate limiter and retrying on
+// transient quota errors. Shared by Archive (labelID "INBOX") and
+// RemoveLabel (any other label).
+func (a *APIService) modifyLabels(ctx context.Context, ids []string, labelID string) error {
 	for _, chunk := range chunkIDs(ids, batchModifyLimit) {
 		req := &gmailapi.BatchModifyMessagesRequest{
 			Ids:            chunk,
-			RemoveLabelIds: []string{"INBOX"},
+			RemoveLabelIds: []string{labelID},
 		}
 		err := withRateLimitRetry(ctx, a.limiter, func() error {
 			return a.svc.Users.Messages.BatchModify("me", req).Context(ctx).Do()
 		})
 		if err != nil {
-			return fmt.Errorf("archiving batch of %d messages: %w", len(chunk), err)
+			return fmt.Errorf("removing label %s from batch of %d messages: %w", labelID, len(chunk), err)
 		}
 	}
 	return nil

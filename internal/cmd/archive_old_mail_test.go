@@ -47,6 +47,11 @@ func (f *fakeGmailService) Archive(ctx context.Context, ids []string) error {
 	return f.archiveErr
 }
 
+func (f *fakeGmailService) RemoveLabel(ctx context.Context, ids []string, label string) error {
+	// Not used in archive_old_mail tests
+	return nil
+}
+
 func TestDoArchiveRun_DryRun_DoesNotCallArchive(t *testing.T) {
 	svc := &fakeGmailService{matches: []gmail.MessageMeta{
 		{ID: "1", Subject: "Old 1", From: "a@example.com", Date: "2026-01-01"},
