@@ -81,6 +81,29 @@ every message currently marked Important. This command only removes the
 Important marker; it does not archive or otherwise move messages. Run
 `archive-old-mail` separately afterward if you also want them archived.
 
+### Mark category mail as read
+
+```bash
+# Dry run (default) — shows what would be marked read, changes nothing
+./bin/email-cleanup mark-read
+
+# Actually mark unread Updates mail as read
+./bin/email-cleanup mark-read --apply
+
+# Target a different category
+./bin/email-cleanup mark-read --category=promotions --apply
+
+# Only mark unread mail older than a date
+./bin/email-cleanup mark-read --before=2026-05-01 --apply
+
+# Try it on just the first 10 matches first
+./bin/email-cleanup mark-read --apply --limit=10
+```
+
+`--category` defaults to `updates` and accepts `primary`, `social`,
+`promotions`, `updates`, `forums`, or `personal`. This command only removes
+the Unread marker; it does not archive, delete, or otherwise move messages.
+
 ### Machine-readable logs
 
 Add `--json` to any command to switch logging from human-friendly text to

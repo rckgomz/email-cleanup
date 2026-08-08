@@ -6,17 +6,19 @@ Guidance for working in this repository.
 
 A Go CLI (`email-cleanup`) for batch Gmail operations, run locally instead
 of through the Gmail UI. Commands: `archive-old-mail` (archives inbox
-messages older than a given date) and `unmark-important` (removes the
-Important marker from matching messages).
+messages older than a given date), `unmark-important` (removes the
+Important marker from matching messages), and `mark-read` (marks unread
+messages in a category as read).
 
 ## Layout
 
 Follows golang-standards/project-layout:
 - `cmd/email-cleanup/main.go` — entrypoint, delegates to `internal/cmd.Execute()`
 - `internal/cmd/` — one file per Cobra subcommand (`root.go`, `init.go`,
-  `credentials_help.go`, `archive_old_mail.go`, `unmark_important.go`),
-  plus `batch_label_run.go` holding the shared search/dry-run/journal core
-  (`doBatchLabelRun`, `batchLabelOp`) both label-removal commands wrap.
+  `credentials_help.go`, `archive_old_mail.go`, `unmark_important.go`,
+  `mark_read.go`), plus `batch_label_run.go` holding the shared
+  search/dry-run/journal core (`doBatchLabelRun`, `batchLabelOp`) all three
+  label-removal commands wrap.
 - `internal/gmail/` — `Service` interface + `APIService` (real Gmail API
   implementation) in `client.go`; OAuth2 config/token handling in `auth.go`
 - `internal/journal/` — append-only JSONL journal (`RunRecord`,
