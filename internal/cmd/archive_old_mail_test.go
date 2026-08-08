@@ -31,9 +31,12 @@ type fakeGmailService struct {
 	archiveCalls int
 }
 
-func (f *fakeGmailService) Search(ctx context.Context, query string) ([]gmail.MessageMeta, error) {
+func (f *fakeGmailService) Search(ctx context.Context, query string, limit int) ([]gmail.MessageMeta, error) {
 	if f.searchErr != nil {
 		return nil, f.searchErr
+	}
+	if limit > 0 && limit < len(f.matches) {
+		return f.matches[:limit], nil
 	}
 	return f.matches, nil
 }
@@ -56,7 +59,7 @@ func TestDoArchiveRun_DryRun_DoesNotCallArchive(t *testing.T) {
 	}
 	out := &bytes.Buffer{}
 
-	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01"}, false, slog.Default(), out)
+	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01"}, false, 0, slog.Default(), out)
 	if err != nil {
 		t.Fatalf("doArchiveRun() error = %v", err)
 	}
@@ -109,7 +112,7 @@ func TestDoArchiveRun_Apply_ArchivesAndPrintsReminder(t *testing.T) {
 	}
 	out := &bytes.Buffer{}
 
-	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01"}, true, slog.Default(), out)
+	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01"}, true, 0, slog.Default(), out)
 	if err != nil {
 		t.Fatalf("doArchiveRun() error = %v", err)
 	}
@@ -148,7 +151,7 @@ func TestDoArchiveRun_SearchError_WritesErrorRunRecord(t *testing.T) {
 	}
 	out := &bytes.Buffer{}
 
-	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01"}, true, slog.Default(), out)
+	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01"}, true, 0, slog.Default(), out)
 	if err == nil {
 		t.Fatal("doArchiveRun() error = nil, want error")
 	}
@@ -204,7 +207,7 @@ func TestDoArchiveRun_ArchiveError_WritesErrorRunRecord(t *testing.T) {
 	}
 	out := &bytes.Buffer{}
 
-	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01", "--apply"}, true, slog.Default(), out)
+	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01", "--apply"}, true, 0, slog.Default(), out)
 	if err == nil {
 		t.Fatal("doArchiveRun() error = nil, want error")
 	}
@@ -250,11 +253,54 @@ func TestDoArchiveRun_NoMatches_DoesNotCallArchive(t *testing.T) {
 	}
 	out := &bytes.Buffer{}
 
-	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", nil, true, slog.Default(), out)
+	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", nil, true, 0, slog.Default(), out)
 	if err != nil {
 		t.Fatalf("doArchiveRun() error = %v", err)
 	}
 	if svc.archiveCalls != 0 {
 		t.Errorf("archiveCalls = %d, want 0 when there are no matches", svc.archiveCalls)
+	}
+}
+
+func TestDoArchiveRun_Limit_PassedThroughToSearchAndCapsArchive(t *testing.T) {
+	svc := &fakeGmailService{matches: []gmail.MessageMeta{
+		{ID: "1", Subject: "Old 1", From: "a@example.com", Date: "2026-01-01"},
+		{ID: "2", Subject: "Old 2", From: "b@example.com", Date: "2026-01-02"},
+		{ID: "3", Subject: "Old 3", From: "c@example.com", Date: "2026-01-03"},
+	}}
+	jPath := filepath.Join(t.TempDir(), "journal.jsonl")
+	jrnl, err := journal.Open(jPath)
+	if err != nil {
+		t.Fatalf("journal.Open() error = %v", err)
+	}
+	out := &bytes.Buffer{}
+
+	err = doArchiveRun(context.Background(), svc, jrnl, "in:inbox before:2026/08/01", []string{"--before=2026-08-01", "--apply", "--limit=2"}, true, 2, slog.Default(), out)
+	if err != nil {
+		t.Fatalf("doArchiveRun() error = %v", err)
+	}
+
+	if len(svc.archivedIDs) != 2 {
+		t.Errorf("archivedIDs = %v, want 2 ids (limit=2)", svc.archivedIDs)
+	}
+	if !strings.Contains(out.String(), "Archived 2 message(s)") {
+		t.Errorf("expected output to report 2 archived messages, got %q", out.String())
+	}
+
+	records, err := journal.ReadAll(jPath)
+	if err != nil {
+		t.Fatalf("journal.ReadAll() error = %v", err)
+	}
+	var messageRecords int
+	for _, r := range records {
+		if r["type"] == "run" && r["matched_count"].(float64) != 2 {
+			t.Errorf("matched_count = %v, want 2 (limit=2)", r["matched_count"])
+		}
+		if r["type"] == "message" {
+			messageRecords++
+		}
+	}
+	if messageRecords != 2 {
+		t.Errorf("messageRecords = %d, want 2 (limit=2)", messageRecords)
 	}
 }

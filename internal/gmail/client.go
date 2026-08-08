@@ -20,7 +20,9 @@ type MessageMeta struct {
 }
 
 type Service interface {
-	Search(ctx context.Context, query string) ([]MessageMeta, error)
+	// Search returns messages matching query. If limit > 0, it stops once
+	// limit messages have been fetched, issuing no further API calls.
+	Search(ctx context.Context, query string, limit int) ([]MessageMeta, error)
 	Archive(ctx context.Context, ids []string) error
 }
 
@@ -32,7 +34,7 @@ func NewAPIService(svc *gmailapi.Service) *APIService {
 	return &APIService{svc: svc}
 }
 
-func (a *APIService) Search(ctx context.Context, query string) ([]MessageMeta, error) {
+func (a *APIService) Search(ctx context.Context, query string, limit int) ([]MessageMeta, error) {
 	var results []MessageMeta
 	pageToken := ""
 	for {
@@ -55,6 +57,9 @@ func (a *APIService) Search(ctx context.Context, query string) ([]MessageMeta, e
 			results = append(results, messageMetaFromAPI(full))
 			if len(results)%progressLogInterval == 0 {
 				slog.Default().Info("fetching message details", "fetched", len(results))
+			}
+			if limit > 0 && len(results) >= limit {
+				return results, nil
 			}
 		}
 		if resp.NextPageToken == "" {

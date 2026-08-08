@@ -20,6 +20,7 @@ import (
 var (
 	beforeDate string
 	applyFlag  bool
+	limitFlag  int
 )
 
 var archiveOldMailCmd = &cobra.Command{
@@ -31,6 +32,7 @@ var archiveOldMailCmd = &cobra.Command{
 func init() {
 	archiveOldMailCmd.Flags().StringVar(&beforeDate, "before", "", "cutoff date, format YYYY-MM-DD (required)")
 	archiveOldMailCmd.Flags().BoolVar(&applyFlag, "apply", false, "actually archive matches (default is dry-run)")
+	archiveOldMailCmd.Flags().IntVar(&limitFlag, "limit", 0, "maximum number of messages to process (0 = no limit)")
 	if err := archiveOldMailCmd.MarkFlagRequired("before"); err != nil {
 		panic(err)
 	}
@@ -45,6 +47,9 @@ func runArchiveOldMail(cmd *cobra.Command, args []string) error {
 	cutoff, err := time.Parse("2006-01-02", beforeDate)
 	if err != nil {
 		return fmt.Errorf("invalid --before date %q, expected YYYY-MM-DD: %w", beforeDate, err)
+	}
+	if limitFlag < 0 {
+		return fmt.Errorf("invalid --limit %d: must be >= 0", limitFlag)
 	}
 
 	credPath := credentialsDirName + "/" + credentialsFileName
@@ -63,14 +68,14 @@ func runArchiveOldMail(cmd *cobra.Command, args []string) error {
 	}
 
 	query := buildQuery(cutoff)
-	return doArchiveRun(cmd.Context(), svc, jrnl, query, os.Args[1:], applyFlag, slog.Default(), cmd.OutOrStdout())
+	return doArchiveRun(cmd.Context(), svc, jrnl, query, os.Args[1:], applyFlag, limitFlag, slog.Default(), cmd.OutOrStdout())
 }
 
-func doArchiveRun(ctx context.Context, svc gmail.Service, jrnl *journal.Journal, query string, args []string, apply bool, logger *slog.Logger, out io.Writer) error {
+func doArchiveRun(ctx context.Context, svc gmail.Service, jrnl *journal.Journal, query string, args []string, apply bool, limit int, logger *slog.Logger, out io.Writer) error {
 	runID := newRunID()
 	start := time.Now()
 
-	matches, err := svc.Search(ctx, query)
+	matches, err := svc.Search(ctx, query, limit)
 	if err != nil {
 		if jErr := jrnl.WriteRun(journal.RunRecord{
 			RunID:         runID,

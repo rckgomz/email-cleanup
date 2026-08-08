@@ -35,11 +35,19 @@ gitignored — never commit it.
 
 # Actually archive matches
 ./bin/email-cleanup archive-old-mail --before=2026-08-01 --apply
+
+# Try it on just the first 10 matches before running it on everything
+./bin/email-cleanup archive-old-mail --before=2026-08-01 --apply --limit=10
 ```
 
 `--before` accepts `YYYY-MM-DD` and matches Gmail's `in:inbox before:...`
 search semantics. Re-running is safe — once a message is archived it no
 longer matches `in:inbox`.
+
+`--limit` caps how many matching messages are processed (searched and,
+with `--apply`, archived). Useful for testing on a small batch before
+running the same command without `--limit` on the full result set.
+Defaults to `0` (no limit).
 
 ### Machine-readable logs
 
